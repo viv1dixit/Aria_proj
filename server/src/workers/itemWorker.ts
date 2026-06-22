@@ -36,17 +36,33 @@ async function scrapeYouTube(url: string): Promise<{ text: string; title?: strin
     }
   } catch { /* non-critical */ }
 
-  const yt = await Innertube.create({ retrieve_player: false });
   const videoIdMatch = url.match(/(?:v=|youtu\.be\/)([A-Za-z0-9_-]{11})/);
   if (!videoIdMatch) throw new Error('Invalid YouTube URL');
-  const info = await yt.getInfo(videoIdMatch[1]);
-  const transcript = await info.getTranscript();
-  const text =
-    transcript.transcript.content?.body?.initial_segments
-      ?.map((s: any) => s.snippet?.text ?? '')
-      .join(' ') ?? '';
 
-  return { text, title: oembedTitle ?? info.basic_info.title ?? undefined, ogImage };
+  const yt = await Innertube.create({ retrieve_player: false });
+  const info = await yt.getInfo(videoIdMatch[1]);
+
+  const title = oembedTitle ?? (info.basic_info.title as string | undefined);
+  const description = (info.basic_info.short_description as string | undefined) ?? '';
+
+  // Attempt transcript — gracefully degrade to description if unavailable
+  let transcriptText = '';
+  try {
+    const transcript = await info.getTranscript();
+    transcriptText =
+      transcript.transcript.content?.body?.initial_segments
+        ?.map((s: any) => s.snippet?.text ?? '')
+        .join(' ') ?? '';
+  } catch (err: any) {
+    console.warn(`[YouTube] Transcript unavailable for ${url}: ${err.message ?? err}`);
+  }
+
+  // Use transcript if we got meaningful text, otherwise fall back to description
+  const text = transcriptText.trim().length > 100 ? transcriptText : description;
+
+  if (!text) throw new Error('No transcript or description available for this video');
+
+  return { text, title, ogImage };
 }
 
 async function processItem(job: Job) {
@@ -107,7 +123,7 @@ async function processItem(job: Job) {
       bullet3: bullets[2],
       keyQuote,
       sentiment,
-      modelUsed: 'claude-sonnet-4-6',
+      modelUsed: 'llama-3.1-8b-instruct',
       tokensUsed,
       generatedAt: new Date(),
     },

@@ -1,6 +1,16 @@
-import Anthropic from '@anthropic-ai/sdk';
+import OpenAI from 'openai';
 
-const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+const client = new OpenAI({
+  baseURL: 'https://openrouter.ai/api/v1',
+  apiKey: process.env.OPENROUTER_API_KEY ?? '',
+  defaultHeaders: {
+    'HTTP-Referer': 'https://github.com/viv1dixit/Aria_proj',
+    'X-Title': 'Aria Reading App',
+  },
+});
+
+// Free models on OpenRouter (no credits needed)
+const FREE_MODEL = 'google/gemma-4-31b-it:free';
 
 export interface AISummaryResult {
   bullets: [string, string, string];
@@ -10,31 +20,26 @@ export interface AISummaryResult {
   tokensUsed: number;
 }
 
+async function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 export async function generateSummaryAndTags(
   content: string,
   type: string,
-  title: string
+  title: string,
+  retries = 3
 ): Promise<AISummaryResult> {
-  // Truncate to ~8000 tokens worth of content (keep first 6000 + last 2000 chars)
   let trimmed = content;
   if (content.length > 32000) {
     trimmed = content.slice(0, 24000) + '\n\n[...]\n\n' + content.slice(-8000);
   }
 
-  const response = await anthropic.messages.create({
-    model: 'claude-sonnet-4-6',
-    max_tokens: 512,
-    temperature: 0.3,
-    system:
-      'You are an expert content summarizer. Extract the most valuable insights from content and return structured JSON. Be concise and specific — no generic statements.',
-    messages: [
-      {
-        role: 'user',
-        content: `Summarize this ${type} titled '${title}':
+  const prompt = `Summarize this ${type} titled '${title}':
 
 ${trimmed}
 
-Return ONLY valid JSON:
+Return ONLY valid JSON (no markdown, no code fences):
 {
   "bullet_1": "First key insight (start with a verb)",
   "bullet_2": "Second key insight (start with a verb)",
@@ -42,19 +47,45 @@ Return ONLY valid JSON:
   "key_quote": "Most memorable direct quote (null if none)",
   "tags": ["tag1", "tag2", "tag3"],
   "sentiment": "positive|negative|neutral|mixed"
-}`,
-      },
-    ],
-  });
+}`;
 
-  const raw = (response.content[0] as Anthropic.TextBlock).text;
-  const parsed = JSON.parse(raw);
+  for (let attempt = 1; attempt <= retries; attempt++) {
+    try {
+      const response = await client.chat.completions.create({
+        model: FREE_MODEL,
+        max_tokens: 512,
+        temperature: 0.3,
+        messages: [
+          {
+            role: 'system',
+            content: 'You are an expert content summarizer. Extract the most valuable insights and return structured JSON only. No markdown, no explanation.',
+          },
+          { role: 'user', content: prompt },
+        ],
+      });
 
-  return {
-    bullets: [parsed.bullet_1, parsed.bullet_2, parsed.bullet_3],
-    keyQuote: parsed.key_quote ?? null,
-    sentiment: parsed.sentiment ?? 'neutral',
-    tags: (parsed.tags as string[]).map((t) => t.toLowerCase()),
-    tokensUsed: response.usage.input_tokens + response.usage.output_tokens,
-  };
+      const raw = (response.choices[0]?.message?.content ?? '').replace(/```json|```/g, '').trim();
+      const parsed = JSON.parse(raw);
+      const tokensUsed = (response.usage?.total_tokens ?? 0);
+
+      return {
+        bullets: [parsed.bullet_1, parsed.bullet_2, parsed.bullet_3],
+        keyQuote: parsed.key_quote ?? null,
+        sentiment: parsed.sentiment ?? 'neutral',
+        tags: (parsed.tags as string[]).map((t) => t.toLowerCase()),
+        tokensUsed,
+      };
+    } catch (err: unknown) {
+      const is429 = err instanceof Error && (err.message.includes('429') || err.message.includes('rate'));
+      if (is429 && attempt < retries) {
+        const delay = attempt * 15_000;
+        console.warn(`[OpenRouter] Rate limited. Retrying in ${delay / 1000}s (attempt ${attempt}/${retries})...`);
+        await sleep(delay);
+        continue;
+      }
+      throw err;
+    }
+  }
+
+  throw new Error('OpenRouter: max retries exceeded');
 }

@@ -48,7 +48,7 @@ export const regenerateSummary = async (req: AuthRequest, res: Response) => {
         bullet3: bullets[2],
         keyQuote,
         sentiment,
-        modelUsed: 'claude-sonnet-4-6',
+        modelUsed: 'llama-3.1-8b-instruct',
         tokensUsed,
         generatedAt: new Date(),
       },
