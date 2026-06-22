@@ -29,7 +29,7 @@ export const googleAuth = (req: Request, res: Response) => {
 
 export const googleCallback = async (req: Request, res: Response) => {
   const { code, error } = req.query;
-  const clientUrl = process.env.CLIENT_URL || 'http://localhost:5173';
+  const clientUrl = process.env.CLIENT_URL || 'http://localhost:3000';
 
   if (error || !code) {
     return res.redirect(`${clientUrl}/?error=access_denied`);
